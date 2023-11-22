@@ -1,11 +1,11 @@
 package routes
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/GeckoZam/EasyMathServer/models"
 	"github.com/GeckoZam/EasyMathServer/storage"
+	"github.com/GeckoZam/EasyMathServer/utils"
 	"github.com/kataras/iris/v12"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -14,7 +14,7 @@ func Register(ctx iris.Context) {
 	var userInput RegisterUserInput
 	err := ctx.ReadJSON(&userInput)
 	if err != nil {
-		fmt.Println(err.Error())
+		utils.HandleValidationErrors(err, ctx)
 		return
 	}
 
@@ -22,18 +22,23 @@ func Register(ctx iris.Context) {
 	userExists, userExistsErr := getAndHandleUserExists(&newUser, userInput.Email)
 
 	if userExistsErr != nil {
-		fmt.Println(err.Error())
+		utils.CreateInternalServerError(ctx)
 		return
 	}
 
-	if userExists == true {
-		fmt.Println("User Exists")
+	if userExists {
+		utils.CreateError(
+			iris.StatusConflict,
+			"Conflict",
+			"Email already registered.",
+			ctx,
+		)
 		return
 	}
 
 	hashedPassword, hashErr := hashAndSaltPassword(userInput.Password)
 	if hashErr != nil {
-		fmt.Println(hashErr.Error())
+		utils.CreateInternalServerError(ctx)
 		return
 	}
 
@@ -53,6 +58,40 @@ func Register(ctx iris.Context) {
 	})
 }
 
+func Login(ctx iris.Context) {
+	var userInput LoginUserInput
+	err := ctx.ReadJSON(&userInput)
+	if err != nil {
+		utils.HandleValidationErrors(err, ctx)
+		return
+	}
+
+	var existingUser models.User
+	errorMsg := "Invalid email or password."
+	userExists, UserExistsErr := getAndHandleUserExists(&existingUser, userInput.Email)
+	if UserExistsErr != nil {
+		utils.CreateInternalServerError(ctx)
+		return
+	}
+
+	if userExists == false {
+		utils.CreateError(iris.StatusUnauthorized, "Credentials Error", errorMsg, ctx)
+	}
+
+	passwordErr := bcrypt.CompareHashAndPassword([]byte(existingUser.Password), []byte(userInput.Password))
+	if passwordErr != nil {
+		utils.CreateError(iris.StatusUnauthorized, "Credentials Error", errorMsg, ctx)
+		return
+	}
+
+	ctx.JSON(iris.Map{
+		"ID":        existingUser.ID,
+		"firstName": existingUser.FirstName,
+		"lastName":  existingUser.LastName,
+		"email":     existingUser.Email,
+	})
+}
+
 func getAndHandleUserExists(user *models.User, email string) (exists bool, err error) {
 	userExistsQuery := storage.DB.Where("email = ?", strings.ToLower(email)).Limit(1).Find(&user)
 
@@ -62,7 +101,7 @@ func getAndHandleUserExists(user *models.User, email string) (exists bool, err e
 
 	userExists := userExistsQuery.RowsAffected > 0
 
-	if userExists == true {
+	if userExists {
 		return true, nil
 	}
 
@@ -83,4 +122,9 @@ type RegisterUserInput struct {
 	LastName  string `json:"lastName" validate:"required,max=256"`
 	Email     string `json:"email" validate:"required,max=256,email"`
 	Password  string `json:"password" validate:"required,min=8,max=256"`
+}
+
+type LoginUserInput struct {
+	Email    string `json:"email" validate:"required,max=256,email"`
+	Password string `json:"password" validate:"required"`
 }
